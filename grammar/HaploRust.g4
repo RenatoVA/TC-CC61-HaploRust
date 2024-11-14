@@ -8,20 +8,32 @@ statement
     : functionDecl
     | printStmt
     | forLoop
+    | whileLoop
+    | matchStmt
     | variableDecl
     | assignment
     | exprStmt
-    | ifStmt              
+    | ifStmt
     ;
 
 // Declaración de variable con tipo
 variableDecl
-    : 'let' IDENTIFIER ':' type '=' expr ';'
+    : 'let' IDENTIFIER ':' (type | tupleType) '=' expr ';'
     ;
 
-// Declaración de función
+// Tipo de tupla
+tupleType
+    : '(' type (',' type)* ')'
+    ;
+
+// Declaración de función con retorno opcional
 functionDecl
-    : 'f' IDENTIFIER '(' parameters? ')' ':' type '{' statement+ '}'
+    : 'f' IDENTIFIER '(' parameters? ')' ':' type '{' statement* returnStmt? '}'
+    ;
+
+// Sentencia de retorno
+returnStmt
+    : 'return' expr ';'
     ;
 
 // Parámetros de función con tipos
@@ -44,6 +56,21 @@ forLoop
     : 'for' IDENTIFIER '=' expr ';' condition ';' IDENTIFIER '++' '{' statement+ '}'
     ;
 
+// Bucle while
+whileLoop
+    : 'while' condition '{' statement+ '}'
+    ;
+
+// Expresión match simplificada
+matchStmt
+    : 'match' expr '{' matchArm+ '}'
+    ;
+
+// Brazo de match simplificado
+matchArm
+    : (expr | '_') '->' statement
+    ;
+
 // Asignación de variable
 assignment
     : IDENTIFIER '=' expr ';'
@@ -63,7 +90,10 @@ ifStmt
 expr
     : expr op=('*'|'/') expr             # MulDiv
     | expr op=('+'|'-') expr             # AddSub
+    | expr comparisonOp expr             # Comparison
+    | '(' expr (',' expr)* ')'           # Tuple
     | '(' expr ')'                       # Parens
+    | IDENTIFIER '[' NUMBER ']'          # TupleAccess
     | NUMBER                             # Number
     | BOOLEAN                            # Boolean
     | STRING                             # String
@@ -71,7 +101,7 @@ expr
     | functionCall                       # CallFunction
     | '-' expr                           # Negate
     | '!' expr                           # Not
-    | expr '?' expr ':' expr             # TernaryOp // Expresión condicional ternaria
+    | expr '?' expr ':' expr             # TernaryOp
     ;
 
 // Llamada a función
