@@ -1,0 +1,4 @@
+f print_message(x: int): void {
+    print(x);
+}
+print_message(5);

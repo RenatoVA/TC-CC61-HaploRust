@@ -5,30 +5,23 @@ program: statement+ EOF;
 
 // Tipos de declaraciones
 statement
-    : functionDecl
+    : variableDecl
+    | functionDecl
     | printStmt
     | forLoop
     | whileLoop
-    | matchStmt
-    | variableDecl
-    | assignment
-    | exprStmt
     | ifStmt
+    | exprStmt
     ;
 
 // Declaración de variable con tipo
 variableDecl
-    : 'let' IDENTIFIER ':' (type | tupleType) '=' expr ';'
-    ;
-
-// Tipo de tupla
-tupleType
-    : '(' type (',' type)* ')'
+    : 'let' IDENTIFIER ':' type '=' expr ';'
     ;
 
 // Declaración de función con retorno opcional
 functionDecl
-    : 'f' IDENTIFIER '(' parameters? ')' ':' type '{' statement* returnStmt? '}'
+    : 'f' IDENTIFIER '(' parameters? ')' ':' type '{' statement* '}'
     ;
 
 // Sentencia de retorno
@@ -61,21 +54,6 @@ whileLoop
     : 'while' condition '{' statement+ '}'
     ;
 
-// Expresión match simplificada
-matchStmt
-    : 'match' expr '{' matchArm+ '}'
-    ;
-
-// Brazo de match simplificado
-matchArm
-    : (expr | '_') '->' statement
-    ;
-
-// Asignación de variable
-assignment
-    : IDENTIFIER '=' expr ';'
-    ;
-
 // Expresión como sentencia
 exprStmt
     : expr ';'
@@ -88,20 +66,14 @@ ifStmt
 
 // Expresiones
 expr
-    : expr op=('*'|'/') expr             # MulDiv
-    | expr op=('+'|'-') expr             # AddSub
-    | expr comparisonOp expr             # Comparison
-    | '(' expr (',' expr)* ')'           # Tuple
+    : functionCall                       # CallFunction
+    | IDENTIFIER                         # Identifier
     | '(' expr ')'                       # Parens
-    | IDENTIFIER '[' NUMBER ']'          # TupleAccess
+    | expr op=('*'|'/') expr             # MulDiv
+    | expr op=('+'|'-') expr             # AddSub
     | NUMBER                             # Number
     | BOOLEAN                            # Boolean
     | STRING                             # String
-    | IDENTIFIER                         # Identifier
-    | functionCall                       # CallFunction
-    | '-' expr                           # Negate
-    | '!' expr                           # Not
-    | expr '?' expr ':' expr             # TernaryOp
     ;
 
 // Llamada a función
@@ -116,7 +88,7 @@ arguments
 
 // Condición en bucle y en if
 condition
-    : expr comparisonOp expr
+    : '(' expr comparisonOp expr ')'
     ;
 
 // Operadores de comparación
@@ -133,7 +105,10 @@ type
     | 'void'
     | IDENTIFIER // Para tipos personalizados
     ;
-
+ADD   : '+' ;
+SUB   : '-' ;
+MUL   : '*' ;
+DIV   : '/' ;
 // Tokens
 IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;
 NUMBER: [0-9]+ ('.' [0-9]+)?;
