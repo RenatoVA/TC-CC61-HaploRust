@@ -31,7 +31,7 @@ opt -S -O1 hrust.ll -o hrust1.ll
 llc hrust.ll
 
 ## Generar el ejecutable
-clang hrust.s -o hrust -no-pie
+clang hrust.s -o hrust.out -no-pie
 
 ## Ejecutar el compilador
 ./hrust
