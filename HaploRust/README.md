@@ -13,5 +13,25 @@ cmake -S src -B build
 ## Compilar el proyecto en el directorio build
 cmake --build build
 
-## Ejecutar el programa C++
-build/prog      or      build/prog > output.ll
+## Ejecutar el programa
+build/prog      or      build/prog test.hrust > hrust.ll
+
+## Compilar el archivo llvm generado
+lli hrust.ll
+
+## Optimizar
+
+### Nivel 0
+opt -S -O0 hrust.ll -o hrust0.ll
+
+### Nivel 1
+opt -S -O1 hrust.ll -o hrust1.ll
+
+## Compilar en assembler
+llc hrust.ll
+
+## Generar el ejecutable
+clang hrust.s -o hrust -no-pie
+
+## Ejecutar el compilador
+./hrust.out
