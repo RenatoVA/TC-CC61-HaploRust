@@ -45,6 +45,7 @@ private:
     std::unordered_map<std::string, SymbolInfo> symbolTable;
     FunctionCallee printfFunc;
     FunctionCallee expFunc;
+    std::string irString;
 
 public:
     HaploRustDriver()
@@ -63,6 +64,10 @@ public:
             Type::getDoubleTy(context), {Type::getDoubleTy(context)}, false);
 
         expFunc = module->getOrInsertFunction("exp", mathFuncType);
+    }
+    std::string getIR() const
+    {
+        return irString;
     }
 
     llvm::Type *getLLVMTypeFromLogicalType(const std::string &logicalType, llvm::LLVMContext &context)
@@ -138,7 +143,13 @@ public:
         }
 
         // Imprimir el módulo
-        module->print(outs(), nullptr);
+        // Serializar el módulo a una cadena
+        llvm::raw_string_ostream rso(irString);
+        module->print(rso, nullptr);
+        rso.flush();
+
+        llvm::errs() << "Debug: IR almacenado internamente en HaploRustDriver\n";
+
         return nullptr;
     }
 

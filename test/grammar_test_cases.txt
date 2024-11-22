@@ -1,17 +1,12 @@
 // 1. Declaración de Variable
 let a : int = 5;
 let b : float = 3.14;
-let isTrue : bool = true;
 let message : string = "Hola, SimpleRust!";
 
 // 2. Asignación de Variable
 a = 10;
 message = "Nuevo mensaje";
 
-// 3. Declaración de Función
-f main() : void {
-    print("Hola Mundo");
-}
 
 f saludo(nombre : string) : void {
     print("Hola, " + nombre);
@@ -30,10 +25,6 @@ saludo("SimpleRust");
 print("Mensaje de prueba");
 print(a + b);
 
-// 6. Bucle For Simplificado
-for i = 0; i < 10; i++ {
-    print(i);
-}
 
 // 7. Sentencia If
 if a == 5 {

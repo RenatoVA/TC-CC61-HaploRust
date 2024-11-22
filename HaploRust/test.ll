@@ -9,22 +9,22 @@ declare double @exp(double)
 
 define i32 @main() {
 entry:
-  %i = alloca i32, align 4
-  store i32 0, ptr %i, align 4
+  %contador = alloca i32, align 4
+  store i32 0, ptr %contador, align 4
   br label %while.cond
 
 while.cond:                                       ; preds = %while.body, %entry
-  %i1 = load i32, ptr %i, align 4
-  %cmp = icmp slt i32 %i1, 5
+  %contador1 = load i32, ptr %contador, align 4
+  %cmp = icmp slt i32 %contador1, 5
   br i1 %cmp, label %while.body, label %while.exit
 
 while.body:                                       ; preds = %while.cond
-  %i2 = load i32, ptr %i, align 4
-  %int_to_double = sitofp i32 %i2 to double
+  %contador2 = load i32, ptr %contador, align 4
+  %int_to_double = sitofp i32 %contador2 to double
   %printf_call = call i32 (ptr, ...) @printf(ptr @fmt, double %int_to_double)
-  %i3 = load i32, ptr %i, align 4
-  %addtmp = add i32 %i3, 1
-  store i32 %addtmp, ptr %i, align 4
+  %contador3 = load i32, ptr %contador, align 4
+  %addtmp = add i32 %contador3, 1
+  store i32 %addtmp, ptr %contador, align 4
   br label %while.cond
 
 while.exit:                                       ; preds = %while.cond

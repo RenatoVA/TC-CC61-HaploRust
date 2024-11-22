@@ -1,5 +1,5 @@
-let i: int = 0;
-while (i < 5) {
-    print(i);
-    i = i + 1;
+let contador :int= 0;
+while contador < 5 {
+    print(contador);
+    contador = contador + 1;
 }
