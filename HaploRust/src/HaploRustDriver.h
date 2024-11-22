@@ -177,6 +177,10 @@ public:
         {
             return visit(ctx->returnStmt());
         }
+        else if (ctx->assignmentStmt())
+        {
+            return visit(ctx->assignmentStmt());
+        }
 
         llvm::errs() << "Error: Tipo de statement no reconocido\n";
         return nullptr;
@@ -435,7 +439,102 @@ public:
     std::any visitWhileLoop(HaploRustParser::WhileLoopContext *ctx) override
     {
         llvm::errs() << "Debug: Entrando a visitWhileLoop\n";
-        return visitChildren(ctx);
+
+        // Crear los bloques básicos necesarios
+        llvm::Function *currentFunction = builder->GetInsertBlock()->getParent();
+
+        // Bloque de condición
+        llvm::BasicBlock *condBlock = llvm::BasicBlock::Create(context, "while.cond", currentFunction);
+        // Bloque del cuerpo del bucle
+        llvm::BasicBlock *bodyBlock = llvm::BasicBlock::Create(context, "while.body", currentFunction);
+        // Bloque de salida
+        llvm::BasicBlock *exitBlock = llvm::BasicBlock::Create(context, "while.exit", currentFunction);
+
+        // Crear salto incondicional al bloque de condición
+        builder->CreateBr(condBlock);
+
+        // Insertar en el bloque de condición
+        builder->SetInsertPoint(condBlock);
+
+        // Evaluar la condición
+        llvm::Value *condValue = std::any_cast<llvm::Value *>(visit(ctx->condition()));
+        if (!condValue)
+        {
+            llvm::errs() << "Error: Condición no válida en while\n";
+            return nullptr;
+        }
+
+        // Crear salto condicional basado en la condición
+        builder->CreateCondBr(condValue, bodyBlock, exitBlock);
+
+        // Insertar en el bloque del cuerpo
+        builder->SetInsertPoint(bodyBlock);
+
+        // Visitar las declaraciones dentro del cuerpo del bucle
+        for (auto stmt : ctx->statement())
+        {
+            visit(stmt);
+        }
+
+        // Salto de regreso al bloque de condición
+        builder->CreateBr(condBlock);
+
+        // Insertar en el bloque de salida
+        builder->SetInsertPoint(exitBlock);
+
+        return nullptr;
+    }
+    std::any visitAssignmentStmt(HaploRustParser::AssignmentStmtContext *ctx)
+    {
+        llvm::errs() << "Debug: Entrando a visitAssignmentStmt\n";
+
+        // Obtener el nombre de la variable
+        std::string varName = ctx->IDENTIFIER()->getText();
+        llvm::errs() << "Debug: Asignando a variable: " << varName << "\n";
+
+        // Verificar que la variable esté definida en la tabla de símbolos
+        if (symbolTable.find(varName) == symbolTable.end())
+        {
+            std::cerr << "Error: Variable '" << varName << "' no está definida\n";
+            return nullptr;
+        }
+
+        // Obtener la información de la variable desde la tabla de símbolos
+        auto &symbolInfo = symbolTable[varName];
+        llvm::Type *varType = symbolInfo.type;
+        const std::string &logicalType = symbolInfo.logicalType;
+
+        // Evaluar la expresión del lado derecho
+        llvm::Value *exprValue = std::any_cast<llvm::Value *>(visit(ctx->expr()));
+        if (!exprValue)
+        {
+            llvm::errs() << "Error: Valor inválido en la asignación a '" << varName << "'\n";
+            return nullptr;
+        }
+
+        // Validar que el tipo del valor coincide con el tipo de la variable
+        if (logicalType == "int" && exprValue->getType()->isDoubleTy())
+        {
+            llvm::errs() << "Debug: Convertir double a int para asignación\n";
+            exprValue = builder->CreateFPToSI(exprValue, llvm::Type::getInt32Ty(context), "double_to_int");
+        }
+        else if (logicalType == "float" && exprValue->getType()->isIntegerTy(32))
+        {
+            llvm::errs() << "Debug: Convertir int a float para asignación\n";
+            exprValue = builder->CreateSIToFP(exprValue, llvm::Type::getDoubleTy(context), "int_to_double");
+        }
+        else if ((logicalType == "int" && !exprValue->getType()->isIntegerTy(32)) ||
+                 (logicalType == "float" && !exprValue->getType()->isDoubleTy()))
+        {
+            std::cerr << "Error: Tipo incompatible en la asignación a '" << varName << "'\n";
+            return nullptr;
+        }
+
+        // Actualizar el valor de la variable
+        builder->CreateStore(exprValue, symbolInfo.llvmValue);
+
+        llvm::errs() << "Debug: Asignación completada para variable: " << varName << "\n";
+        return nullptr;
     }
 
     std::any visitExprStmt(HaploRustParser::ExprStmtContext *ctx) override

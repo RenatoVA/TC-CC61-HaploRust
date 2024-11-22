@@ -6,6 +6,7 @@ program: statement+ EOF;
 // Tipos de declaraciones
 statement
     : variableDecl
+    | assignmentStmt
     | functionDecl
     | printStmt
     | forLoop
@@ -28,6 +29,10 @@ functionDecl
 // Sentencia de retorno
 returnStmt
     : 'return' expr ';'
+    ;
+// Asignación de variable
+assignmentStmt
+    : IDENTIFIER '=' expr ';'
     ;
 
 // Parámetros de función con tipos
