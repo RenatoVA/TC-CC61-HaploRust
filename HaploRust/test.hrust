@@ -1,4 +1,5 @@
-f print_message(x: int): void {
-    print(x);
+f suma(a: int, b: int): int {
+    let resultado: int = a + b;
+    return resultado;
 }
-print_message(5);
+print(suma(4,3));

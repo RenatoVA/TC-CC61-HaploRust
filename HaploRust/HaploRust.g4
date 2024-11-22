@@ -12,6 +12,7 @@ statement
     | whileLoop
     | ifStmt
     | exprStmt
+    | returnStmt  // Añadido para reconocer declaraciones de retorno
     ;
 
 // Declaración de variable con tipo

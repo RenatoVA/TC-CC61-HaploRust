@@ -98,47 +98,48 @@ public:
     {
         llvm::errs() << "Debug: Entrando a visitProgram\n";
 
-    // Crear la función main
-    FunctionType *mainType = FunctionType::get(Type::getInt32Ty(context), false);
-    Function *mainFunc = Function::Create(mainType, Function::ExternalLinkage, "main", module.get());
+        // Crear la función main
+        FunctionType *mainType = FunctionType::get(Type::getInt32Ty(context), false);
+        Function *mainFunc = Function::Create(mainType, Function::ExternalLinkage, "main", module.get());
 
-    // Crear el bloque básico de entrada
-    BasicBlock *entry = BasicBlock::Create(context, "entry", mainFunc);
-    builder->SetInsertPoint(entry);
+        BasicBlock *entry = BasicBlock::Create(context, "entry", mainFunc);
+        builder->SetInsertPoint(entry);
 
-    // Visitar cada statement
-    for (auto stmt : ctx->statement())
-    {
-        visit(stmt);
+        for (auto stmt : ctx->statement())
+        {
+            if (stmt->functionDecl())
+            {
+                // Visitar la declaración de la función
+                visit(stmt);
+                // Restaurar el punto de inserción al bloque de entrada de main
+                builder->SetInsertPoint(entry);
+            }
+            else
+            {
+                // Visitar otras declaraciones que se insertan en main
+                visit(stmt);
+            }
+        }
 
-        // Verifica si el bloque actual ya tiene un terminador
         if (!builder->GetInsertBlock()->getTerminator())
         {
-            llvm::errs() << "Debug: Agregando terminador por defecto al bloque básico\n";
+            llvm::errs() << "Debug: Agregando retorno final al main\n";
             builder->CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
         }
-    }
 
-    // Agregar terminador al final de main si no existe
-    if (!builder->GetInsertBlock()->getTerminator())
-    {
-        llvm::errs() << "Debug: Agregando retorno final al main\n";
-        builder->CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
-    }
+        // Verificar función y módulo
+        if (verifyFunction(*mainFunc, &errs()))
+        {
+            errs() << "Error: La función main contiene errores\n";
+        }
+        if (verifyModule(*module, &errs()))
+        {
+            errs() << "Error: El módulo contiene errores\n";
+        }
 
-    // Verificar función y módulo
-    if (verifyFunction(*mainFunc, &errs()))
-    {
-        errs() << "Error: La función main contiene errores\n";
-    }
-    if (verifyModule(*module, &errs()))
-    {
-        errs() << "Error: El módulo contiene errores\n";
-    }
-
-    // Imprimir el módulo
-    module->print(outs(), nullptr);
-    return nullptr;
+        // Imprimir el módulo
+        module->print(outs(), nullptr);
+        return nullptr;
     }
 
     std::any visitStatement(HaploRustParser::StatementContext *ctx) override
@@ -172,6 +173,10 @@ public:
         {
             return visit(ctx->ifStmt());
         }
+        else if (ctx->returnStmt())
+        {
+            return visit(ctx->returnStmt());
+        }
 
         llvm::errs() << "Error: Tipo de statement no reconocido\n";
         return nullptr;
@@ -184,7 +189,25 @@ public:
         llvm::errs() << "Debug: Variable identificada: " << varName << "\n";
         std::string logicalType = ctx->type()->getText(); // Obtiene el tipo lógico directamente de la gramática
         llvm::errs() << "Debug: Tipo lógico: " << logicalType << "\n";
-        Value *exprValue = std::any_cast<Value *>(visit(ctx->expr()));
+        Value *exprValue = nullptr;
+        try
+        {
+            exprValue = std::any_cast<Value *>(visit(ctx->expr()));
+        }
+        catch (const std::bad_any_cast &e)
+        {
+            llvm::errs() << "Error: std::bad_any_cast en visitVariableDecl al procesar expr: "
+                         << ctx->expr()->getText() << "\n";
+            llvm::errs() << "Excepción: " << e.what() << "\n";
+            return nullptr;
+        }
+
+        if (!exprValue)
+        {
+            llvm::errs() << "Error: visit(ctx->expr()) retornó nullptr para la expresión: "
+                         << ctx->expr()->getText() << "\n";
+            return nullptr;
+        }
         llvm::Type *llvmType = getLLVMTypeFromLogicalType(logicalType, context);
         if (!llvmType)
         {
@@ -268,15 +291,10 @@ public:
                 // Reservar espacio para el parámetro en la pila
                 llvm::AllocaInst *alloc = builder->CreateAlloca(paramIt->getType(), nullptr, paramName.c_str());
                 builder->CreateStore(&(*paramIt), alloc);
-                llvm::errs() << "Debug: Registrando parámetro " << paramName
-                             << " con tipo " << *(paramIt->getType()) << "\n";
-
-                // Registrar en la tabla de símbolos
                 symbolTable[paramName] = {paramIt->getType(), paramCtx->type()->getText(), alloc};
                 paramIt++;
             }
         }
-
         llvm::errs() << "Debug: Parámetros registrados para la función " << funcName << "\n";
 
         // Visitar las instrucciones en el cuerpo de la función
@@ -285,8 +303,8 @@ public:
             visit(stmtCtx);
         }
 
-        // Agregar retorno implícito para funciones void
-        if (returnType->isVoidTy())
+        // Si la función es void, agrega un retorno explícito
+        if (returnType->isVoidTy() && !builder->GetInsertBlock()->getTerminator())
         {
             builder->CreateRetVoid();
         }
@@ -299,13 +317,48 @@ public:
     {
         llvm::errs() << "Debug: Entrando a visitReturnStmt\n";
 
-        llvm::Value *returnValue = std::any_cast<llvm::Value *>(visit(ctx->expr()));
-        if (!returnValue)
+        llvm::Value *returnValue = nullptr;
+        if (ctx->expr())
         {
-            llvm::errs() << "Error: Valor de retorno inválido\n";
+            returnValue = std::any_cast<llvm::Value *>(visit(ctx->expr()));
+            if (!returnValue)
+            {
+                llvm::errs() << "Error: Valor de retorno inválido\n";
+                return nullptr;
+            }
+        }
+
+        // Verificar el tipo de retorno de la función actual
+        Function *currentFunction = builder->GetInsertBlock()->getParent();
+        Type *returnType = currentFunction->getReturnType();
+
+        if (returnType->isVoidTy())
+        {
+            llvm::errs() << "Error: Función con tipo de retorno void no puede retornar un valor\n";
             return nullptr;
         }
 
+        if (returnValue->getType() != returnType)
+        {
+            // Convertir el tipo de retorno si es necesario
+            if (returnType->isDoubleTy() && returnValue->getType()->isIntegerTy())
+            {
+                llvm::errs() << "Debug: Convertir int a double para el retorno\n";
+                returnValue = builder->CreateSIToFP(returnValue, Type::getDoubleTy(context), "int_to_double_ret");
+            }
+            else if (returnType->isIntegerTy() && returnValue->getType()->isDoubleTy())
+            {
+                llvm::errs() << "Debug: Convertir double a int para el retorno\n";
+                returnValue = builder->CreateFPToSI(returnValue, Type::getInt32Ty(context), "double_to_int_ret");
+            }
+            else
+            {
+                llvm::errs() << "Error: Tipos de retorno incompatibles\n";
+                return nullptr;
+            }
+        }
+
+        // Emitir la instrucción de retorno
         builder->CreateRet(returnValue);
         return nullptr;
     }
@@ -325,8 +378,9 @@ public:
     std::any visitPrintStmt(HaploRustParser::PrintStmtContext *ctx) override
     {
         llvm::errs() << "Debug: Entrando a visitPrintStmt\n";
+
         // Evalúa la expresión
-        Value *exprValue = std::any_cast<Value *>(visit(ctx->expr()));
+        llvm::Value *exprValue = std::any_cast<llvm::Value *>(visit(ctx->expr()));
         if (!exprValue)
         {
             auto token = ctx->getStart();
@@ -336,59 +390,37 @@ public:
         }
 
         // Determina el formato basado en el tipo lógico
-        Value *formatStr = nullptr;
+        llvm::Value *formatStr = nullptr;
 
-        // Verifica si la expresión es un identificador
-        if (auto identifierCtx = dynamic_cast<HaploRustParser::IdentifierContext *>(ctx->expr()))
+        // Identifica el tipo de la expresión
+        llvm::Type *exprType = exprValue->getType();
+        if (exprType->isIntegerTy())
         {
-            std::string varName = identifierCtx->IDENTIFIER()->getText();
-
-            // Verifica que la variable esté en la tabla de símbolos
-            if (symbolTable.find(varName) == symbolTable.end())
-            {
-                std::cerr << "Error: Variable '" << varName << "' no definida\n";
-                return std::any();
-            }
-
-            // Usa el tipo lógico de la tabla de símbolos
-            const std::string &logicalType = symbolTable[varName].logicalType;
-            if (logicalType == "float")
-            {
-                formatStr = builder->CreateGlobalString("%lf\n", "fmt");
-            }
-            else if (logicalType == "int")
-            {
-                exprValue = builder->CreateSIToFP(exprValue, Type::getDoubleTy(context), "int_to_double");
-                formatStr = builder->CreateGlobalString("%lf\n", "fmt");
-            }
-            else if (logicalType == "string")
-            {
-                formatStr = builder->CreateGlobalString("%s\n", "fmt");
-            }
-            else
-            {
-                std::cerr << "Error: Tipo no soportado para impresión\n";
-                return std::any();
-            }
-        }
-        else if (dynamic_cast<HaploRustParser::NumberContext *>(ctx->expr()))
-        {
-            // Maneja literales numéricos
+            // Si es un entero
+            llvm::errs() << "Debug: Expresión es un entero\n";
+            exprValue = builder->CreateSIToFP(exprValue, llvm::Type::getDoubleTy(context), "int_to_double");
             formatStr = builder->CreateGlobalString("%lf\n", "fmt");
         }
-        else if (dynamic_cast<HaploRustParser::StringContext *>(ctx->expr()))
+        else if (exprType->isDoubleTy())
         {
-            // Maneja literales de cadena
+            // Si es un flotante
+            llvm::errs() << "Debug: Expresión es un flotante\n";
+            formatStr = builder->CreateGlobalString("%lf\n", "fmt");
+        }
+        else if (exprType->isPointerTy())
+        {
+            // Si es una cadena
+            llvm::errs() << "Debug: Expresión es una cadena\n";
             formatStr = builder->CreateGlobalString("%s\n", "fmt");
         }
         else
         {
-            std::cerr << "Error: Tipo no soportado para impresión\n";
+            llvm::errs() << "Error: Tipo no soportado para impresión\n";
             return std::any();
         }
 
         // Crea la llamada a printf
-        std::vector<Value *> printfArgs = {formatStr, exprValue};
+        std::vector<llvm::Value *> printfArgs = {formatStr, exprValue};
         builder->CreateCall(printfFunc, printfArgs, "printf_call");
 
         return std::any();
@@ -468,25 +500,149 @@ public:
     std::any visitMulDiv(HaploRustParser::MulDivContext *ctx) override
     {
         llvm::errs() << "Debug: Entrando a visitMulDiv\n";
-        Value *left = std::any_cast<Value *>(visit(ctx->expr(0)));
-        Value *right = std::any_cast<Value *>(visit(ctx->expr(1)));
+        // Visitar las expresiones izquierda y derecha
+        llvm::Value *left = std::any_cast<llvm::Value *>(visit(ctx->expr(0)));
+        llvm::Value *right = std::any_cast<llvm::Value *>(visit(ctx->expr(1)));
 
-        int opType = ctx->op->getType();
+        // Obtener el operador
+        std::string op = ctx->op->getText();
 
-        if (opType == HaploRustParser::MUL)
+        // Determinar el tipo de los operandos
+        if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy())
         {
-            return builder->CreateFMul(left, right, "multmp");
+            if (op == "*")
+            {
+                llvm::errs() << "Debug: Realizando Mul (Entero)\n";
+                return builder->CreateMul(left, right, "multmp");
+            }
+            else if (op == "/")
+            {
+                llvm::errs() << "Debug: Realizando SDiv (Entero)\n";
+                return builder->CreateSDiv(left, right, "divtmp");
+            }
+        }
+        else if (left->getType()->isDoubleTy() && right->getType()->isDoubleTy())
+        {
+            if (op == "*")
+            {
+                llvm::errs() << "Debug: Realizando FMul (Flotante)\n";
+                return builder->CreateFMul(left, right, "fmultmp");
+            }
+            else if (op == "/")
+            {
+                llvm::errs() << "Debug: Realizando FDiv (Flotante)\n";
+                return builder->CreateFDiv(left, right, "fdivtmp");
+            }
         }
         else
         {
-            return builder->CreateFDiv(left, right, "divtmp");
+            llvm::errs() << "Error: Tipos incompatibles para MulDiv\n";
+            return nullptr;
         }
+
+        llvm::errs() << "Error: Operador no soportado en MulDiv: " << op << "\n";
+        return nullptr;
+    }
+    llvm::Value *concatenateStrings(llvm::Value *left, llvm::Value *right)
+    {
+        llvm::errs() << "Debug: Entrando a concatenateStrings\n";
+
+        // Asume que `left` y `right` son punteros a cadenas válidos
+        llvm::Value *leftLen = builder->CreateCall(
+            module->getOrInsertFunction("strlen", llvm::FunctionType::get(
+                                                      llvm::Type::getInt64Ty(context),
+                                                      {llvm::PointerType::getUnqual(context)},
+                                                      false)),
+            {left},
+            "strlen_left");
+
+        llvm::Value *rightLen = builder->CreateCall(
+            module->getOrInsertFunction("strlen", llvm::FunctionType::get(
+                                                      llvm::Type::getInt64Ty(context),
+                                                      {llvm::PointerType::getUnqual(context)},
+                                                      false)),
+            {right},
+            "strlen_right");
+
+        // Calcular la longitud total (strlen(left) + strlen(right) + 1 para el terminador)
+        llvm::Value *totalLen = builder->CreateAdd(
+            leftLen,
+            builder->CreateAdd(rightLen, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 1)),
+            "total_len");
+
+        // Allocar espacio para la cadena concatenada
+        llvm::Value *resultBuffer = builder->CreateAlloca(
+            llvm::ArrayType::get(llvm::Type::getInt8Ty(context), 1024),
+            nullptr,
+            "result_buffer");
+
+        // Crear llamada a `sprintf` para concatenar las cadenas
+        llvm::Value *formatStr = builder->CreateGlobalString("%s%s", "fmt");
+        builder->CreateCall(
+            module->getOrInsertFunction(
+                "sprintf",
+                llvm::FunctionType::get(
+                    llvm::Type::getInt32Ty(context),
+                    {llvm::PointerType::getUnqual(context), llvm::PointerType::getUnqual(context),
+                     llvm::PointerType::getUnqual(context), llvm::PointerType::getUnqual(context)},
+                    true)),
+            {resultBuffer, formatStr, left, right});
+
+        // Retorna el puntero al resultado
+        return resultBuffer;
     }
 
     std::any visitAddSub(HaploRustParser::AddSubContext *ctx) override
     {
         llvm::errs() << "Debug: Entrando a visitAddSub\n";
-        return visitChildren(ctx);
+        // Visitar las expresiones izquierda y derecha
+        llvm::Value *left = std::any_cast<llvm::Value *>(visit(ctx->expr(0)));
+        llvm::Value *right = std::any_cast<llvm::Value *>(visit(ctx->expr(1)));
+
+        // Obtener el operador
+        std::string op = ctx->op->getText();
+
+        // Determinar el tipo de los operandos
+        if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy())
+        {
+            if (op == "+")
+            {
+                llvm::errs() << "Debug: Realizando Add (Entero)\n";
+                return builder->CreateAdd(left, right, "addtmp");
+            }
+            else if (op == "-")
+            {
+                llvm::errs() << "Debug: Realizando Sub (Entero)\n";
+                return builder->CreateSub(left, right, "subtmp");
+            }
+        }
+        else if (left->getType()->isDoubleTy() && right->getType()->isDoubleTy())
+        {
+            if (op == "+")
+            {
+                llvm::errs() << "Debug: Realizando FAdd (Flotante)\n";
+                return builder->CreateFAdd(left, right, "faddtmp");
+            }
+            else if (op == "-")
+            {
+                llvm::errs() << "Debug: Realizando FSub (Flotante)\n";
+                return builder->CreateFSub(left, right, "fsubtmp");
+            }
+        }
+        else if (left->getType()->isPointerTy() && right->getType()->isPointerTy())
+        {
+            llvm::PointerType *leftPtrType = llvm::dyn_cast<llvm::PointerType>(left->getType());
+            llvm::PointerType *rightPtrType = llvm::dyn_cast<llvm::PointerType>(right->getType());
+
+            if (leftPtrType && rightPtrType && op == "+")
+            {
+                llvm::errs() << "Debug: Realizando concatenación de cadenas\n";
+                return concatenateStrings(left, right);
+            }
+        }
+
+        llvm::errs() << "Error: Operador no soportado en AddSub: " << op << "\n";
+        return nullptr;
     }
 
     std::any visitParens(HaploRustParser::ParensContext *ctx) override
@@ -532,8 +688,8 @@ public:
         auto &symbolInfo = symbolTable[varName];
         Type *varType = symbolInfo.type;
         const std::string &logicalType = symbolInfo.logicalType;
-        llvm::errs() << "Debug: Variable '" << varName 
-             << "' tiene logicalType: " << logicalType << "\n";
+        llvm::errs() << "Debug: Variable '" << varName
+                     << "' tiene logicalType: " << logicalType << "\n";
 
         // Carga el valor de la variable desde la memoria
         Value *value = builder->CreateLoad(varType, symbolInfo.llvmValue, varName.c_str());
@@ -565,6 +721,7 @@ public:
             return nullptr;
         }
 
+        // Retornar el valor para tipos no string
         return value;
     }
 
@@ -577,6 +734,7 @@ public:
         if (numText.find('.') != std::string::npos)
         {
             // Número con punto decimal => double
+            llvm::errs() << "Debug: Procesando número flotante: " << numText << "\n";
             auto numVal = std::stod(numText);
             llvm::Value *val = llvm::ConstantFP::get(context, llvm::APFloat(numVal));
             return std::any(val);
@@ -584,6 +742,7 @@ public:
         else
         {
             // Número entero => int
+            llvm::errs() << "Debug: Procesando número entero: " << numText << "\n";
             auto numVal = std::stoi(numText);
             llvm::Value *val = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), numVal);
             return std::any(val);
@@ -600,17 +759,7 @@ public:
     {
         llvm::errs() << "Debug: Entrando a visitCallFunction\n";
 
-        // Obtener el contexto de `functionCall`
-        auto funcCallCtx = ctx->functionCall();
-
-        if (!funcCallCtx)
-        {
-            llvm::errs() << "Error: Contexto de functionCall no encontrado\n";
-            return nullptr;
-        }
-
-        // Obtener el nombre de la función
-        std::string funcName = funcCallCtx->IDENTIFIER()->getText();
+        std::string funcName = ctx->functionCall()->IDENTIFIER()->getText();
         llvm::Function *function = module->getFunction(funcName);
 
         if (!function)
@@ -621,17 +770,37 @@ public:
 
         // Procesar argumentos
         std::vector<llvm::Value *> args;
-        if (funcCallCtx->arguments())
+        if (ctx->functionCall()->arguments())
         {
-            for (auto &argCtx : funcCallCtx->arguments()->expr())
+            for (auto &argCtx : ctx->functionCall()->arguments()->expr())
             {
                 llvm::Value *argValue = std::any_cast<llvm::Value *>(visit(argCtx));
                 args.push_back(argValue);
             }
         }
 
-        // Crear llamada a función
-        return builder->CreateCall(function, args, "calltmp");
+        llvm::errs() << "Debug: Creando llamada a función " << funcName << "\n";
+
+        if (function->getReturnType()->isVoidTy())
+        {
+            llvm::errs() << "Debug: Retornando void\n";
+            builder->CreateCall(function, args);
+            return nullptr;
+        }
+        else
+        {
+            llvm::errs() << "Debug: Retornando otra cosa\n";
+            llvm::Value *callValue = builder->CreateCall(function, args, "calltmp");
+
+            if (!callValue)
+            {
+                llvm::errs() << "Error: CreateCall retornó nullptr para la función: " << funcName << "\n";
+                return nullptr;
+            }
+
+            llvm::errs() << "Debug: Llamada a función creada exitosamente\n";
+            return callValue;
+        }
     }
 
     std::any visitFunctionCall(HaploRustParser::FunctionCallContext *ctx) override
