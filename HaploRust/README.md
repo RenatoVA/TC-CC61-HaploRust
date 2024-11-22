@@ -34,4 +34,4 @@ llc hrust.ll
 clang hrust.s -o hrust -no-pie
 
 ## Ejecutar el compilador
-./hrust.out
+./hrust
